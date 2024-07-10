@@ -107,10 +107,13 @@ class PPO(Agent):
         # models
         self.policy = self.models.get("policy", None)
         self.value = self.models.get("value", None)
+        self.q_critic = self.models.get("q_critic", None)  # Add Q-function critic model
 
         # checkpoint models
         self.checkpoint_modules["policy"] = self.policy
-        self.checkpoint_modules["value"] = self.value
+        self.checkpoint_modules["value"] = self.value 
+        if self.q_critic is not None:
+            self.checkpoint_modules["q_critic"] = self.q_critic  # Add Q-critic to checkpoints
 
         # broadcast models' parameters in distributed runs
         if config.torch.is_distributed:
@@ -138,6 +141,7 @@ class PPO(Agent):
 
         self._learning_rate = self.cfg["learning_rate"]
         self._learning_rate_scheduler = self.cfg["learning_rate_scheduler"]
+        self._critic_learning_rate = self.cfg.get("critic_learning_rate", self._learning_rate)
 
         self._state_preprocessor = self.cfg["state_preprocessor"]
         self._value_preprocessor = self.cfg["value_preprocessor"]
@@ -160,6 +164,8 @@ class PPO(Agent):
                                                   lr=self._learning_rate)
             if self._learning_rate_scheduler is not None:
                 self.scheduler = self._learning_rate_scheduler(self.optimizer, **self.cfg["learning_rate_scheduler_kwargs"])
+            if self.q_critic is not None:
+                self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(), lr=self._critic_learning_rate)
 
             self.checkpoint_modules["optimizer"] = self.optimizer
 
@@ -380,6 +386,7 @@ class PPO(Agent):
         cumulative_policy_loss = 0
         cumulative_entropy_loss = 0
         cumulative_value_loss = 0
+        cumulative_q_loss = 0
 
         # learning epochs
         for epoch in range(self._learning_epochs):
@@ -422,7 +429,13 @@ class PPO(Agent):
                     predicted_values = sampled_values + torch.clip(predicted_values - sampled_values,
                                                                    min=-self._value_clip,
                                                                    max=self._value_clip)
-                value_loss = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values)
+                value_loss = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values) 
+                # compute Q-function loss
+                if self.q_critic is not None:
+                    predicted_q_values, _, _ = self.q_critic.act({"states": sampled_states, "taken_actions": sampled_actions}, role="q_critic")
+                    q_loss = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_q_values) 
+                else:
+                    q_loss = 0
 
                 # optimization step
                 self.optimizer.zero_grad()
@@ -431,6 +444,8 @@ class PPO(Agent):
                     self.policy.reduce_parameters()
                     if self.policy is not self.value:
                         self.value.reduce_parameters()
+                    if self.q_critic is not None:
+                        self.q_critic.reduce_parameters()
                 if self._grad_norm_clip > 0:
                     if self.policy is self.value:
                         nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
@@ -438,9 +453,17 @@ class PPO(Agent):
                         nn.utils.clip_grad_norm_(itertools.chain(self.policy.parameters(), self.value.parameters()), self._grad_norm_clip)
                 self.optimizer.step()
 
+                if self.q_critic is not None:
+                    self.q_critic_optimizer.zero_grad()
+                    (q_loss).backward()
+                    if self._grad_norm_clip > 0:
+                        nn.utils.clip_grad_norm_(self.q_critic.parameters(), self._grad_norm_clip)
+                    self.q_critic_optimizer.step()
+
                 # update cumulative losses
                 cumulative_policy_loss += policy_loss.item()
                 cumulative_value_loss += value_loss.item()
+                cumulative_q_loss += q_loss.item()
                 if self._entropy_loss_scale:
                     cumulative_entropy_loss += entropy_loss.item()
 
@@ -454,6 +477,7 @@ class PPO(Agent):
         # record data
         self.track_data("Loss / Policy loss", cumulative_policy_loss / (self._learning_epochs * self._mini_batches))
         self.track_data("Loss / Value loss", cumulative_value_loss / (self._learning_epochs * self._mini_batches))
+        self.track_data("Loss / Q-function loss", cumulative_q_loss / (self._learning_epochs * self._mini_batches))  # Track Q-loss
         if self._entropy_loss_scale:
             self.track_data("Loss / Entropy loss", cumulative_entropy_loss / (self._learning_epochs * self._mini_batches))
 
