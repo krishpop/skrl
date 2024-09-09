@@ -8,6 +8,7 @@ import gymnasium
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import skrl
 
 from skrl import config, logger
 from skrl.agents.torch import Agent
@@ -166,6 +167,7 @@ class PPO(Agent):
                 self.scheduler = self._learning_rate_scheduler(self.optimizer, **self.cfg["learning_rate_scheduler_kwargs"])
             if self.q_critic is not None:
                 self.q_critic_optimizer = torch.optim.Adam(self.q_critic.parameters(), lr=self._critic_learning_rate)
+                self.checkpoint_modules["q_critic_optimizer"] = self.q_critic_optimizer
 
             self.checkpoint_modules["optimizer"] = self.optimizer
 

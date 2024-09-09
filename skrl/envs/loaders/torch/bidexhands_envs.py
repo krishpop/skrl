@@ -45,6 +45,7 @@ def load_bidexhands_env(task_name: str = "",
                         num_envs: Optional[int] = None,
                         headless: Optional[bool] = None,
                         cli_args: Sequence[str] = [],
+                        task_type: Optional[str] = "MultiAgent",
                         bidexhands_path: str = "",
                         show_cfg: bool = True):
     """Load a Bi-DexHands environment
@@ -77,56 +78,43 @@ def load_bidexhands_env(task_name: str = "",
     """
     import isaacgym  # isort:skip
     import bidexhands
+    # Initialize cli_args if not provided
+    if not cli_args:
+        cli_args = []
 
-    # check task from command line arguments
-    defined = False
-    for arg in sys.argv:
-        if arg.startswith("--task"):
-            defined = True
-            break
-    # get task name from command line arguments
-    if defined:
-        arg_index = sys.argv.index("--task") + 1
-        if arg_index >= len(sys.argv):
-            raise ValueError("No task name defined. Set the task_name parameter or use --task <task_name> as command line argument")
-        if task_name and task_name != sys.argv[arg_index]:
-            logger.warning(f"Overriding task ({task_name}) with command line argument ({sys.argv[arg_index]})")
-    # get task name from function arguments
-    else:
+    # Helper function to check if an argument is already in cli_args or sys.argv
+    def arg_exists(arg_prefix):
+        return any(arg.startswith(arg_prefix) for arg in cli_args + sys.argv)
+
+    # Handle task argument
+    if not arg_exists("--task"):
         if task_name:
-            sys.argv.append("--task")
-            sys.argv.append(task_name)
+            cli_args.extend(["--task", task_name])
         else:
             raise ValueError("No task name defined. Set the task_name parameter or use --task <task_name> as command line argument")
+    elif task_name:
+        logger.warning(f"Ignoring task_name parameter ({task_name}) as --task is already defined in command line arguments")
 
-    # check num_envs from command line arguments
-    defined = False
-    for arg in sys.argv:
-        if arg.startswith("--num_envs"):
-            defined = True
-            break
-    # get num_envs from command line arguments
-    if defined:
-        if num_envs is not None:
-            logger.warning("Overriding num_envs with command line argument --num_envs")
-    # get num_envs from function arguments
-    elif num_envs is not None and num_envs > 0:
-        sys.argv.append("--num_envs")
-        sys.argv.append(str(num_envs))
+    # Handle num_envs argument
+    if not arg_exists("--num_envs"):
+        if num_envs is not None and num_envs > 0:
+            cli_args.extend(["--num_envs", str(num_envs)])
+    elif num_envs is not None:
+        logger.warning("Ignoring num_envs parameter as --num_envs is already defined in command line arguments")
 
-    # check headless from command line arguments
-    defined = False
-    for arg in sys.argv:
-        if arg.startswith("--headless"):
-            defined = True
-            break
-    # get headless from command line arguments
-    if defined:
+    # Handle task_type argument
+    if not arg_exists("--task_type"):
+        if task_type is not None and task_type != "":
+            cli_args.extend(["--task_type", str(task_type)])
+    elif task_type is not None:
+        logger.warning("Ignoring task_type parameter as --task_type is already defined in command line arguments")
+
+    # Handle headless argument
+    if not arg_exists("--headless"):
         if headless is not None:
-            logger.warning("Overriding headless with command line argument --headless")
-    # get headless from function arguments
+            cli_args.append("--headless")
     elif headless is not None:
-        sys.argv.append("--headless")
+        logger.warning("Ignoring headless parameter as --headless is already defined in command line arguments")
 
     # others command line arguments
     sys.argv += cli_args
@@ -160,7 +148,6 @@ def load_bidexhands_env(task_name: str = "",
         _print_cfg(vars(args))
 
     # update task arguments
-    args.task_type = "MultiAgent"  # TODO: get from parameters
     args.cfg_train = os.path.join(path, args.cfg_train)
     args.cfg_env = os.path.join(path, args.cfg_env)
 
